@@ -12,6 +12,7 @@ import (
 	"sync"
 )
 
+// Call 一次RPC所需要的信息
 type Call struct {
 	Seq           uint64
 	ServiceMethod string      // format "<service>.<method>"
@@ -26,16 +27,19 @@ func (c *Call) done() {
 	c.Done <- c
 }
 
+// Client 代表一个RPC客户端
+// 一个 Client 可以与多个 Call 相关联，
+//一个Client可以同时被多个goroutines使用。
 type Client struct {
-	cc       codec.Codec
-	opt      *Option
-	sending  sync.Mutex // protect following
-	header   codec.Header
+	cc       codec.Codec  // 消息解码器
+	opt      *Option      // 通信协议的默认配置
+	sending  sync.Mutex   // protect following, 保证请求的有序发送
+	header   codec.Header // 每个请求的消息头
 	mu       sync.Mutex
-	seq      uint64
-	pending  map[uint64]*Call
-	closing  bool // user has called Close
-	shutdown bool // server has told us to stop
+	seq      uint64           // 发送的请求编号，每个请求拥有唯一编号
+	pending  map[uint64]*Call // 存储未处理完的请求
+	closing  bool             // user has called Close 用户主动关闭
+	shutdown bool             // server has told us to stop  服务器有错误产生
 }
 
 var _ io.Closer = (*Client)(nil)
@@ -100,17 +104,20 @@ func (client *Client) terminateCalls(err error) {
 	}
 }
 
+// receive 客户端接收请求功能
 func (client *Client) receive() {
 	var err error
 
 	for err == nil {
+		// 读取协议头
 		var h codec.Header
 		if err = client.cc.ReadHeader(&h); err != nil {
 			break
 		}
-
+		// 接受的call的响应，将请求call移除
 		call := client.removeCall(h.Seq)
-		switch {
+
+		switch { // 处理三种不同的情况
 		case call == nil: // call 不存在，可能是请求没有发送完整，或者因为其他原因被取消，但是服务端仍旧处理了。
 			err = client.cc.ReadBody(nil)
 
@@ -132,6 +139,7 @@ func (client *Client) receive() {
 	client.terminateCalls(err)
 }
 
+// NewClient 创建Client实例，首先需要完成一开始的协议交换，即发送 Option 信息给服务端。协商好消息的编解码方式之后，再创建一个子协程调用 receive() 接收响应。
 func NewClient(conn net.Conn, opt *Option) (*Client, error) {
 	f := codec.NewCodecFuncMap[opt.CodecType]
 
@@ -180,7 +188,7 @@ func parseOptions(opts ...*Option) (*Option, error) {
 	return opt, nil
 }
 
-// Dial connects to an RPC server at the specified network address
+// Dial connects to an RPC server at the specified network address 便于用户传入服务端地址，创建 Client 实例。为了简化用户调用
 func Dial(network, address string, opts ...*Option) (client *Client, err error) {
 	opt, err := parseOptions(opts...)
 	if err != nil {
@@ -200,6 +208,7 @@ func Dial(network, address string, opts ...*Option) (client *Client, err error) 
 	return NewClient(conn, opt)
 }
 
+// send 客户端发送请求
 func (client *Client) send(call *Call) {
 	// make sure that the client will send a complete request
 	client.sending.Lock()
@@ -230,7 +239,7 @@ func (client *Client) send(call *Call) {
 	}
 }
 
-// Go invokes the function asynchronously.
+// Go invokes the function asynchronously(异步).
 // It returns the Call structure representing the invocation.
 func (client *Client) Go(serviceMethod string, args, reply interface{}, done chan *Call) *Call {
 	if done == nil {
