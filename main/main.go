@@ -1,10 +1,10 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net"
 	rpc_go "rpc-go"
-	"rpc-go/client"
 	"sync"
 	"time"
 )
@@ -115,7 +115,7 @@ func main() {
 	addr := make(chan string)
 	go startServer(addr)
 
-	cli, _ := client.Dial("tcp", <-addr)
+	cli, _ := rpc_go.Dial("tcp", <-addr)
 	defer func() { _ = cli.Close() }()
 
 	time.Sleep(time.Second)
@@ -128,8 +128,10 @@ func main() {
 		go func(i int) {
 			defer wg.Done()
 			args := &Args{Num1: i, Num2: i * i}
+
 			var reply int
-			if err := cli.Call("Foo.Sum", args, &reply); err != nil {
+			ctx, _ := context.WithTimeout(context.Background(), time.Second)
+			if err := cli.Call(ctx, "Foo.Sum", args, &reply); err != nil {
 				log.Fatal("call foo.Sum error:", err)
 			}
 			log.Printf("%d + %d = %d", args.Num1, args.Num2, reply)
