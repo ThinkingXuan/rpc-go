@@ -1,4 +1,4 @@
-package service
+package rpc_go
 
 import (
 	"go/ast"
@@ -18,7 +18,7 @@ func (m *methodType) NumCalls() uint64 {
 	return atomic.LoadUint64(&m.numCalls)
 }
 
-func (m *methodType) newArgs() reflect.Value {
+func (m *methodType) newArgv() reflect.Value {
 	var argv reflect.Value
 	// arg may be a pointer type or a value type
 	if m.ArgType.Kind() == reflect.Ptr {
@@ -60,6 +60,9 @@ func newService(rcvr interface{}) *service {
 	return s
 }
 
+// registerMethods 过滤出了符合条件的方法：
+//两个导出或内置类型的入参（反射时为 3 个，第 0 个是自身，类似于 python 的 self，java 中的 this）
+//返回值有且只有 1 个，类型为 error
 func (s *service) registerMethods() {
 	s.method = make(map[string]*methodType)
 	for i := 0; i < s.typ.NumMethod(); i++ {
@@ -86,4 +89,15 @@ func (s *service) registerMethods() {
 
 func isExportedOrBuiltinType(t reflect.Type) bool {
 	return ast.IsExported(t.Name()) || t.PkgPath() == ""
+}
+
+// 实现 call 方法，即能够通过反射值调用方法。
+func (s *service) call(m *methodType, argv, replyv reflect.Value) error {
+	atomic.AddUint64(&m.numCalls, 1)
+	f := m.method.Func
+	returnValues := f.Call([]reflect.Value{s.rcvr, argv, replyv})
+	if errInter := returnValues[0].Interface(); errInter != nil {
+		return errInter.(error)
+	}
+	return nil
 }
